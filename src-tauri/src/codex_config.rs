@@ -417,7 +417,7 @@ pub fn write_codex_live_atomic_with_stable_provider(
 ///
 /// Supported fields:
 /// - `"base_url"`: writes to `[model_providers.<current>].base_url` if `model_provider` exists,
-///   otherwise falls back to top-level `base_url`.
+///   otherwise falls back to top-level `openai_base_url`.
 /// - `"model"`: writes to top-level `model` field.
 ///
 /// Empty value removes the field.
@@ -458,11 +458,13 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
                 }
             }
 
-            // Fallback: no model_provider or structure mismatch → top-level base_url
+            // Fallback: no model_provider or structure mismatch → built-in OpenAI provider.
             if trimmed.is_empty() {
+                doc.as_table_mut().remove("openai_base_url");
                 doc.as_table_mut().remove("base_url");
             } else {
-                doc["base_url"] = toml_edit::value(trimmed);
+                doc.as_table_mut().remove("base_url");
+                doc["openai_base_url"] = toml_edit::value(trimmed);
             }
         }
         "model" => {
@@ -478,8 +480,10 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
     Ok(doc.to_string())
 }
 
-/// Remove `base_url` from the active model_provider section only if it matches `predicate`.
-/// Also removes top-level `base_url` if it matches.
+/// Remove proxy base URL fields only if they match `predicate`.
+///
+/// This removes `base_url` from the active model_provider section, plus top-level
+/// `openai_base_url` and legacy top-level `base_url` if they match.
 /// Used by proxy cleanup to strip local proxy URLs without touching user-configured URLs.
 pub fn remove_codex_toml_base_url_if(toml_str: &str, predicate: impl Fn(&str) -> bool) -> String {
     let mut doc = match toml_str.parse::<DocumentMut>() {
@@ -513,7 +517,16 @@ pub fn remove_codex_toml_base_url_if(toml_str: &str, predicate: impl Fn(&str) ->
         }
     }
 
-    // Fallback: also clean up top-level base_url if it matches
+    let should_remove_openai_base = doc
+        .get("openai_base_url")
+        .and_then(|item| item.as_str())
+        .map(&predicate)
+        .unwrap_or(false);
+    if should_remove_openai_base {
+        doc.as_table_mut().remove("openai_base_url");
+    }
+
+    // Legacy fallback: also clean up top-level base_url if it matches.
     let should_remove_root = doc
         .get("base_url")
         .and_then(|item| item.as_str())
@@ -817,7 +830,7 @@ model = "gpt-4"
     }
 
     #[test]
-    fn base_url_falls_back_to_top_level_without_model_provider() {
+    fn base_url_falls_back_to_openai_base_url_without_model_provider() {
         let input = r#"model = "gpt-4"
 "#;
 
@@ -825,10 +838,11 @@ model = "gpt-4"
         let parsed: toml::Value = toml::from_str(&result).unwrap();
 
         let base_url = parsed
-            .get("base_url")
+            .get("openai_base_url")
             .and_then(|v| v.as_str())
-            .expect("should set top-level base_url");
+            .expect("should set top-level openai_base_url");
         assert_eq!(base_url, "https://fallback.api/v1");
+        assert!(parsed.get("base_url").is_none());
     }
 
     #[test]
@@ -977,5 +991,24 @@ base_url = "https://production.api/v1"
             .and_then(|v| v.get("base_url"))
             .and_then(|v| v.as_str());
         assert_eq!(base_url, Some("https://production.api/v1"));
+    }
+
+    #[test]
+    fn remove_base_url_if_removes_openai_base_url() {
+        let input = r#"model = "gpt-5.4"
+openai_base_url = "http://127.0.0.1:15721/v1"
+base_url = "http://127.0.0.1:15721/v1"
+"#;
+
+        let result =
+            remove_codex_toml_base_url_if(input, |url| url.starts_with("http://127.0.0.1"));
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+
+        assert!(parsed.get("openai_base_url").is_none());
+        assert!(parsed.get("base_url").is_none());
+        assert_eq!(
+            parsed.get("model").and_then(|v| v.as_str()),
+            Some("gpt-5.4")
+        );
     }
 }

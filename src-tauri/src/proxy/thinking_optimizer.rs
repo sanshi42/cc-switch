@@ -27,7 +27,6 @@ pub fn optimize(body: &mut Value, config: &OptimizerConfig) {
     if model.contains("opus-4-7") || model.contains("opus-4-6") || model.contains("sonnet-4-6") {
         log::info!("[OPT] thinking: adaptive({model})");
         body["thinking"] = json!({"type": "adaptive"});
-        body["output_config"] = json!({"effort": "max"});
         append_beta(body, "context-1m-2025-08-07");
         return;
     }
@@ -130,7 +129,6 @@ mod tests {
 
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert!(body["thinking"].get("budget_tokens").is_none());
-        assert_eq!(body["output_config"]["effort"], "max");
         let betas = body["anthropic_beta"].as_array().unwrap();
         assert!(betas.iter().any(|v| v == "context-1m-2025-08-07"));
     }
@@ -147,7 +145,6 @@ mod tests {
 
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert!(body["thinking"].get("budget_tokens").is_none());
-        assert_eq!(body["output_config"]["effort"], "max");
         let betas = body["anthropic_beta"].as_array().unwrap();
         assert!(betas.iter().any(|v| v == "context-1m-2025-08-07"));
     }

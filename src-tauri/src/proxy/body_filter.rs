@@ -4,6 +4,7 @@
 //!
 //! ## 过滤规则
 //! - 以 `_` 开头的字段被视为私有参数，会被递归过滤
+//! - 已知上游不兼容字段会被递归过滤
 //! - 支持白名单机制，允许透传特定的 `_` 前缀字段
 //! - 支持嵌套对象和数组的深度过滤
 //!
@@ -15,6 +16,8 @@
 
 use serde_json::Value;
 use std::collections::HashSet;
+
+const UPSTREAM_INCOMPATIBLE_KEYS: &[&str] = &["client_metadata", "output_config"];
 
 /// 过滤私有参数（以 `_` 开头的字段）
 ///
@@ -79,8 +82,10 @@ fn filter_recursive_with_whitelist(
             let filtered: serde_json::Map<String, Value> = map
                 .into_iter()
                 .filter_map(|(key, val)| {
-                    // 以 _ 开头且不在白名单中的字段被过滤
-                    if key.starts_with('_') && !whitelist.contains(key.as_str()) {
+                    // 以 _ 开头且不在白名单中，或属于已知上游不兼容字段，则过滤
+                    if (key.starts_with('_') && !whitelist.contains(key.as_str()))
+                        || UPSTREAM_INCOMPATIBLE_KEYS.contains(&key.as_str())
+                    {
                         removed_keys.push(key);
                         None
                     } else {
@@ -224,6 +229,64 @@ mod tests {
 
         // 无私有参数时，输出应与输入相同
         assert_eq!(input, output);
+    }
+
+    #[test]
+    fn test_filter_upstream_incompatible_client_metadata() {
+        let input = json!({
+            "model": "gpt-5.4",
+            "client_metadata": {
+                "session_id": "session-1"
+            },
+            "input": [
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "client_metadata": {
+                        "nested": true
+                    }
+                }
+            ]
+        });
+
+        let output = filter_private_params(input);
+
+        assert!(output.get("client_metadata").is_none());
+
+        let input_items = output.get("input").unwrap().as_array().unwrap();
+        assert!(input_items[0].get("client_metadata").is_none());
+        assert_eq!(input_items[0].get("role").unwrap(), "user");
+        assert_eq!(input_items[0].get("content").unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_filter_upstream_incompatible_output_config() {
+        let input = json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "output_config": {
+                        "format": "text"
+                    }
+                }
+            ],
+            "output_config": {
+                "format": "text"
+            },
+            "max_tokens": 128
+        });
+
+        let output = filter_private_params(input);
+
+        assert!(output.get("output_config").is_none());
+        assert_eq!(output.get("max_tokens").unwrap(), &json!(128));
+
+        let messages = output.get("messages").unwrap().as_array().unwrap();
+        assert!(messages[0].get("output_config").is_none());
+        assert_eq!(messages[0].get("role").unwrap(), "user");
+        assert_eq!(messages[0].get("content").unwrap(), "hello");
     }
 
     #[test]

@@ -2018,7 +2018,7 @@ requires_openai_auth = true
     }
 
     #[test]
-    fn update_toml_base_url_falls_back_to_top_level_base_url() {
+    fn update_toml_base_url_falls_back_to_openai_base_url() {
         let input = r#"
 model = "gpt-5.1-codex"
 "#;
@@ -2030,11 +2030,15 @@ model = "gpt-5.1-codex"
             toml::from_str(&output).expect("updated config should be valid TOML");
 
         let base_url = parsed
-            .get("base_url")
+            .get("openai_base_url")
             .and_then(|v| v.as_str())
-            .expect("base_url should exist");
+            .expect("openai_base_url should exist");
 
         assert_eq!(base_url, new_url);
+        assert!(
+            parsed.get("base_url").is_none(),
+            "should not write legacy top-level base_url"
+        );
     }
 
     #[tokio::test]
